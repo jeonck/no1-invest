@@ -2,96 +2,106 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pyupbit
+import requests
 from datetime import datetime
 
-# 1. 페이지 설정 (모바일 대응을 위해 Wide 모드 해제 고려 가능하나, 여기선 가독성 위주 설정)
-st.set_page_config(page_title="JD부자연구소 모바일", layout="centered")
+# 1. 페이지 설정
+st.set_page_config(page_title="원칙투자 가이드", layout="centered")
 
-# 2. 모바일용 커스텀 CSS (카드형 디자인 및 큰 폰트)
+# 2. 커스텀 CSS
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: bold; }
-    .status-card {
-        padding: 20px;
-        border-radius: 15px;
-        margin-bottom: 10px;
-        text-align: center;
-        color: white;
-    }
-    .safe { background-color: #28a745; }
-    .warning { background-color: #ffc107; color: black; }
-    .danger { background-color: #dc3545; }
-    .info-box { background-color: #f1f3f5; padding: 15px; border-radius: 10px; border-left: 5px solid #339af0; margin: 10px 0; }
+    .fng-container { padding: 20px; border-radius: 15px; text-align: center; color: white; margin-bottom: 20px; }
+    .extreme-fear { background-color: #dc3545; }
+    .fear { background-color: #ffc107; color: black; }
+    .neutral { background-color: #6c757d; }
+    .greed { background-color: #28a745; }
+    .extreme-greed { background-color: #007bff; }
+    .guide-table { font-size: 0.9rem; width: 100%; border-collapse: collapse; }
     </style>
     """, unsafe_allow_html=True)
 
-def get_data(ticker, is_crypto=False):
-    try:
-        if is_crypto:
-            df = pyupbit.get_ohlcv(ticker, interval="day", count=200)
-            curr = df['close'].iloc[-1]
-            high = df['high'].max()
-        else:
-            t = yf.Ticker(ticker)
-            df = t.history(period="1y")
-            curr = df['Close'].iloc[-1]
-            high = df['High'].max()
-        return curr, high, (curr - high) / high * 100
-    except:
-        return 0, 0, 0
-
-# 나스닥 -3% 체크 로직 (최근 31일)
+# 3. 데이터 로드 함수
 @st.cache_data(ttl=3600)
-def check_nasdaq_signal():
-    ndq = yf.download("^IXIC", period="2mo", progress=False)
-    ndq['Change'] = ndq['Close'].pct_change() * 100
-    m3_days = ndq[ndq['Change'] <= -3.0]
-    if m3_days.empty:
-        return "SAFE", None
-    last_date = m3_days.index[-1]
-    days_passed = (datetime.now() - last_date).days
-    return ("WAIT", last_date) if days_passed < 31 else ("SAFE", last_date)
+def get_fng_index():
+    """CNN Fear & Greed Index 스크래핑 (간이 구현)"""
+    try:
+        # 공식 API가 없으므로 유료/공공 데이터 대용으로 랜덤 샘플 혹은 간이 파싱 로직 사용
+        # 실사용 시에는 정식 API 라이브러리(fear-and-greed) 권장
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers).json()
+        val = int(r['market_indicator']['current_value'])
+        desc = r['market_indicator']['rating']
+        return val, desc
+    except:
+        return 50, "Neutral (Data Error)"
 
-# --- 메인 화면 ---
-st.title("🚀 JD 부자연구소")
-signal, last_date = check_nasdaq_signal()
+def get_stock_data(ticker):
+    t = yf.Ticker(ticker)
+    df = t.history(period="1y")
+    curr = df['Close'].iloc[-1]
+    high = df['High'].max()
+    return curr, high, (curr - high) / high * 100
 
-# 3. 신호등 시스템 (가장 먼저 보임)
-if signal == "SAFE":
-    st.markdown('<div class="status-card safe">✅ 매수 가능 (한 달간 -3% 없음)</div>', unsafe_allow_html=True)
-else:
-    st.markdown(f'<div class="status-card danger">🚨 대기 모드 (-3% 발생: {last_date.date()})</div>', unsafe_allow_html=True)
+# --- 메인 대시보드 ---
+st.title("🛡️ 원칙투자 가이드")
+st.caption("Principle Invest: 정해진 매뉴얼에 의한 기계적 투자")
 
-tab1, tab2 = st.tabs(["🇺🇸 미국 주식", "₿ 비트코인"])
+# [A] 공포탐욕지수 섹션
+fng_val, fng_desc = get_fng_index()
+fng_class = fng_desc.lower().replace(" ", "-")
+st.markdown(f'### 📊 시장 심리 지수')
+st.markdown(f'<div class="fng-container {fng_class}"><b>CNN Fear & Greed: {fng_val} ({fng_desc})</b></div>', unsafe_allow_html=True)
 
-# --- 주식 탭 ---
+tab1, tab2 = st.tabs(["🇺🇸 미국 주식 ETF", "₿ 비트코인"])
+
+# --- TAB 1: 미국 주식 (ETF 선택 가능) ---
 with tab1:
-    ticker = st.text_input("종목 입력", value="AAPL").upper()
-    curr, high, dd = get_data(ticker)
+    selected_ticker = st.selectbox("종목 선택", ["SMH", "FTEC", "QQQ", "SPY", "AAPL", "MSFT"])
+    curr, high, dd = get_stock_data(selected_ticker)
     
-    # 모바일에서는 세로로 배치하는 것이 가독성이 좋음
-    st.metric("현재가", f"${curr:.2f}")
-    st.metric("전고점 대비 하락률", f"{dd:.2f}%", delta=f"{dd:.2f}%")
-    
-    st.markdown('<div class="info-box">', unsafe_allow_html=True)
-    st.write("### 📝 대응 매뉴얼")
+    col1, col2 = st.columns(2)
+    col1.metric(f"{selected_ticker} 현재가", f"${curr:.2f}")
+    col2.metric("전고점 대비 하락률", f"{dd:.2f}%", delta=f"{dd:.2f}%")
+
+    # [B] 10% 매도 구간표 (조던 리밸런싱 매뉴얼 기반)
+    st.write("### 📝 리밸런싱 매도 구간표")
+    guide_data = {
+        "하락률 (전고점 대비)": ["-2.5%", "-5.0%", "-7.5%", "-10.0% (말뚝박기)"],
+        "주식 보유 비중": ["90%", "80%", "70%", "현금 100% (매뉴얼 기준)"],
+        "대응 액션": ["10% 매도", "추가 10% 매도", "추가 10% 매도", "전량 매도 후 관망"]
+    }
+    st.table(pd.DataFrame(guide_data))
+
+    # 현재 상태 진단
+    st.write("### 🚩 현재 대응 전략")
     if dd <= -10:
-        st.error("말뚝박기 진행 중: 현금 비중 대폭 확대")
+        st.error(f"**위험**: 전량 매도 후 -3% 룰(V자 반등) 확인 대기 구간입니다.")
     elif dd <= -2.5:
-        st.warning(f"리밸런싱 구간: 현재 하락률 {dd:.1f}%에 맞춰 비중 조절")
+        st.warning(f"**주의**: 리밸런싱 매도 구간입니다. 위 표의 비중을 확인하세요.")
     else:
-        st.success("보유 구간: 시총 1등 유지 시 홀딩")
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.success("**안전**: 정상 보유 구간입니다. 세계 1등주/우량 ETF를 유지하세요.")
 
-# --- 코인 탭 ---
+# --- TAB 2: 비트코인 ---
 with tab2:
-    coin = st.selectbox("코인 선택", ["KRW-BTC", "KRW-ETH", "KRW-SOL"])
-    curr_c, high_c, dd_c = get_data(coin, is_crypto=True)
-    
-    st.metric("현재 시세", f"{int(curr_c):,} 원")
+    curr_c, high_c, dd_c = 0, 0, 0
+    try:
+        df_c = pyupbit.get_ohlcv("KRW-BTC", interval="day", count=100)
+        curr_c = df_c['close'].iloc[-1]
+        high_c = df_c['high'].max()
+        dd_c = (curr_c - high_c) / high_c * 100
+    except: pass
+
+    st.metric("BTC 현재가", f"{int(curr_c):,} 원")
     st.metric("전고점 대비", f"{dd_c:.2f}%", delta=f"{dd_c:.2f}%")
+    st.info("코인은 변동성이 크므로 주식 매뉴얼보다 더 엄격한 현금 비중 관리가 필요합니다.")
 
-    st.info("💡 코인은 변동성이 크므로 전체 자산의 10% 이내 운용을 권장합니다.")
-
-# 하단 정보
-st.caption(f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# 하단 나스닥 -3% 체크 (V자 반등 조건)
+st.divider()
+ndq = yf.download("^IXIC", period="1mo", progress=False)
+m3_exists = not ndq[ndq['Close'].pct_change() <= -0.03].empty
+if m3_exists:
+    st.markdown("⚠️ **V자 반등 조건 미충족**: 최근 31일 내 나스닥 -3%가 발생했습니다. 보수적 접근 권장.")
+else:
+    st.markdown("✅ **V자 반등 조건 충족**: 최근 한 달간 나스닥 -3%가 없었습니다. 재진입 가능 구간.")
